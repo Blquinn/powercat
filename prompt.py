@@ -117,7 +117,9 @@ def build_prompt(t, cat_response) -> str:
 
     example_t_text = ""
     if cat_response:
-        example_t_text = f"""Here are some examples of previous categorization(s):
+        example_t_text = f"""
+Here are some examples of previous categorization(s), you should prefer
+these previous categorizations over inferring them from the transaction's fields:
 
 ```
 {cat_response}
@@ -300,7 +302,7 @@ def get_multiple_tries(prompt, transaction):
 def generate_categorization_query_prompt(t):
     return f"Which category was the transaction with the description '{t['Description']}', " + \
         f" account '{t['Account']}' and institution '{t["Institution"]}' " + \
-        f"categorized as?"
+        f"categorized as? Say there were no previous categorizations if there were none."
 
 
 client = chromadb.Client()
