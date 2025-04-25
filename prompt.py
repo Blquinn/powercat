@@ -163,8 +163,6 @@ Output the response in the following json format, only output the json and nothi
 ```
 """
 
-tries = 5
-
 
 def validate_response_data(dat, transaction):
     if dat['category'] not in cats:
@@ -191,7 +189,10 @@ def massage_data(dat):
         new_lvl = int(lvl * 100)
     else:
         # Prob a string
-        new_lvl = int(lvl)
+        try:
+            new_lvl = int(lvl)
+        except:
+            new_lvl = int(float(lvl))
 
     log.debug(f"Converted confidence from {type(lvl)} {lvl} -> {type(new_lvl)} {new_lvl}")
 
@@ -205,9 +206,9 @@ rex = re.compile(f'```(json)?(.+)```', re.DOTALL | re.IGNORECASE | re.MULTILINE)
 
 def extract_data(response, transaction):
     try:
-        if model == 'llama3.2':
+        try:
             res = json.loads(response)
-        else:
+        except:
             match = rex.search(response)
             if not match:
                 log.info(f"Failed to find json in response: {response}")
@@ -215,7 +216,7 @@ def extract_data(response, transaction):
 
             res = json.loads(match.groups()[1])
 
-        log.info(f"Parsed json {res}")
+        log.debug(f"Parsed json {res}")
             
         res = massage_data(res)
 
@@ -231,8 +232,11 @@ def extract_data(response, transaction):
 confidence_cuttoff = 70
 
 # Make sure we're over the cutoff on half of the attempts
-total_confidence_cuttoff = confidence_cuttoff * (tries // 2)
+# total_confidence_cuttoff = confidence_cuttoff * (tries // 2)
 
+high_confidence_level = 97
+
+max_attempts = 5
 
 def choose_category(datas):
     cat_sums = {}
@@ -243,18 +247,23 @@ def choose_category(datas):
             continue
 
         if cat in cat_sums:
-            cat_sums[cat] += confidence
+            cat_sums[cat]['total'] += confidence
+            cat_sums[cat]['count'] += 1
         else:
-            cat_sums[cat] = confidence
+            cat_sums[cat] = {
+                'total': confidence,
+                'count': 1,
+            }
 
     if not cat_sums:
         return None
 
-    sums_sorted = sorted(cat_sums.items(), key=lambda x: x[1], reverse=True)
+    sums_sorted = sorted(cat_sums.items(), key=lambda x: x[1]['total'], reverse=True)
 
-    confidence_sum = sums_sorted[0][1]
+    high = sums_sorted[0][1]
+    avg = high['total'] / high['count']
 
-    if confidence_sum < total_confidence_cuttoff:
+    if avg < confidence_cuttoff:
         return None
 
     return sums_sorted[0][0]
@@ -263,7 +272,7 @@ def choose_category(datas):
 def get_multiple_tries(prompt, transaction):
 
     datas = []
-    for _ in range(tries):
+    for i in range(max_attempts):
         response: ChatResponse = chat(model=model, messages=[
             {
                 'role': 'user',
@@ -273,22 +282,24 @@ def get_multiple_tries(prompt, transaction):
 
         response_content = response['message']['content']
 
-        print(response_content)
+        log.debug(response_content)
 
         data = extract_data(response_content, transaction)
         if data:
             datas.append(data)
 
+            if data['confidenceLevel'] >= high_confidence_level:
+                return (i+1, datas)
+
     if not datas:
-        log.error(f"Failed to get data after {tries} attempts.")
+        log.error(f"Failed to get data after {max_attempts} attempts.")
 
-    return datas
-
+    return (max_attempts, datas)
 
 
 def generate_categorization_query_prompt(t):
     return f"Which category was the transaction with the description '{t['Description']}', " + \
-        f" account '{t['Account']}' and institution 'f{t["Institution"]}' " + \
+        f" account '{t['Account']}' and institution '{t["Institution"]}' " + \
         f"categorized as?"
 
 
@@ -304,7 +315,6 @@ for i, d in enumerate(get_example_trans_docs()):
         embeddings=embeddings,
         documents=[d]
     )
-
 
 
 with open('./out/transactions-out.csv', 'w', newline='', encoding='utf-8') as out_f:
@@ -348,9 +358,12 @@ with open('./out/transactions-out.csv', 'w', newline='', encoding='utf-8') as ou
 
         num_tokens = num_tokens_from_string(prompt, "o200k_base")
 
-        log.info(f"This prompt contains {num_tokens} tokens.")
+        log.debug(f"This prompt contains {num_tokens} tokens.")
 
-        datas = get_multiple_tries(prompt, t)
+        attempts, datas = get_multiple_tries(prompt, t)
+
+        log.info(f"Got response in {attempts} tries.")
+
         cat = choose_category(datas)
 
         log.info(f"Categorized {cat} from {t}")
