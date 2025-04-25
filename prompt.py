@@ -15,7 +15,7 @@ import chromadb
 
 logging.basicConfig(level=logging.INFO)
 
-logging.getLogger('httpx').setLevel(logging.WARN)
+logging.getLogger("httpx").setLevel(logging.WARN)
 
 log = logging.getLogger(__name__)
 
@@ -26,54 +26,48 @@ def num_tokens_from_string(string: str, encoding_name: str) -> int:
     return num_tokens
 
 
-embedding_model = 'nomic-embed-text'
+embedding_model = "nomic-embed-text"
 # model = 'llama3.2'
 # model = 'deepseek-r1'
-model = 'mistral'
+model = "mistral"
 transaction_file = "./data/transactions-all.csv"
 accounts_file = "./data/accounts.csv"
 categories_file = "./data/categories.csv"
+output_file = "./out/transactions-out.csv"
 
 
 def read_accounts():
-    with open(accounts_file, 'r') as f:
+    with open(accounts_file, "r") as f:
         r = csv.DictReader(f)
         return [
             {
-                'Account': row['Account'],
-                'Account #': row['Account #'],
-                'Class': row['Class'],
-                'Group': row['Group'],
+                "Account": row["Account"],
+                "Account #": row["Account #"],
+                "Class": row["Class"],
+                "Group": row["Group"],
             }
             for row in r
         ]
 
 
 def read_categories():
-    with open(categories_file, 'r') as cats_f:
+    with open(categories_file, "r") as cats_f:
         r = csv.DictReader(cats_f)
-        return [row['Category'] for row in r]
+        return [row["Category"] for row in r]
 
 
 def read_transactions():
-    with open(transaction_file, 'r') as trans_f:
+    with open(transaction_file, "r") as trans_f:
 
         r = csv.DictReader(trans_f)
 
-        return [
-            {
-                k: v
-                for k, v in row.items()
-                if k and v
-            }
-            for row in r
-        ]
+        return [{k: v for k, v in row.items() if k and v} for row in r]
 
 
 def get_transaction_fields():
-    with open(transaction_file, 'r') as trans_f:
+    with open(transaction_file, "r") as trans_f:
         first = trans_f.readline()
-        return first.strip().split(',')
+        return first.strip().split(",")
 
 
 cats = read_categories()
@@ -82,36 +76,38 @@ accts = read_accounts()
 
 
 def get_example_trans():
-    categorized = [
-        t for t in trans
-        if t.get('Category')
-    ]
+    categorized = [t for t in trans if t.get("Category")]
 
     examples = []
     seen_descriptions = set()
     for t in categorized:
-        if t['Description'] in seen_descriptions:
+        if t["Description"] in seen_descriptions:
             continue
 
-        seen_descriptions.add(t['Description'])
+        seen_descriptions.add(t["Description"])
 
         examples.append(t)
 
     return examples
 
+
 def get_example_trans_docs():
     return [
-        f"Transaction with description '{t['Description']}', Account '{t['Account']}' from institution '{t['Institution']}' " +
-            f"was categorized as '{t['Category']}'"
+        f"Transaction with description '{t['Description']}', Account '{t['Account']}' from institution '{t['Institution']}' "
+        + f"was categorized as '{t['Category']}'"
         for t in example_trans
     ]
+
 
 example_trans = get_example_trans()
 
 
 def build_prompt(t, cat_response) -> str:
     accts_text = "\n".join(
-        (f"Account Name: {a["Account"]}, Account Type: {a["Group"]}, Account Class: {a["Class"]}" for a in accts)
+        (
+            f"Account Name: {a["Account"]}, Account Type: {a["Group"]}, Account Class: {a["Class"]}"
+            for a in accts
+        )
     )
     t_text = "\n".join((f"{k}: {v}" for k, v in t.items()))
 
@@ -127,7 +123,7 @@ these previous categorizations over inferring them from the transaction's fields
 """
 
     c_text = "\n".join(cats)
-    
+
     return f"""Please categorize the following financial transaction.
 {example_t_text}
 
@@ -167,23 +163,23 @@ Output the response in the following json format, only output the json and nothi
 
 
 def validate_response_data(dat, transaction):
-    if dat['category'] not in cats:
+    if dat["category"] not in cats:
         raise Exception(f"Got unexpected category {dat['category']}")
 
-    lvl = dat['confidenceLevel']
+    lvl = dat["confidenceLevel"]
     if lvl <= 0 or lvl > 100:
         raise Exception(f"Got unexpected confidence level {lvl} {lvl}")
 
-    if dat['transactionId'] != transaction['Transaction ID']:
+    if dat["transactionId"] != transaction["Transaction ID"]:
         raise Exception(f"Got unexpected transaction id")
 
-    if dat['accountId'] != transaction['Account ID']:
+    if dat["accountId"] != transaction["Account ID"]:
         raise Exception(f"Got unexpected account id")
-    
+
 
 def massage_data(dat):
 
-    lvl = dat['confidenceLevel']
+    lvl = dat["confidenceLevel"]
     new_lvl = None
     if isinstance(lvl, int) and lvl in (1, 100):
         new_lvl = lvl
@@ -196,15 +192,18 @@ def massage_data(dat):
         except:
             new_lvl = int(float(lvl))
 
-    log.debug(f"Converted confidence from {type(lvl)} {lvl} -> {type(new_lvl)} {new_lvl}")
+    log.debug(
+        f"Converted confidence from {type(lvl)} {lvl} -> {type(new_lvl)} {new_lvl}"
+    )
 
     return {
         **dat,
-        'confidenceLevel': new_lvl,
+        "confidenceLevel": new_lvl,
     }
-    
 
-rex = re.compile(f'```(json)?(.+)```', re.DOTALL | re.IGNORECASE | re.MULTILINE)
+
+rex = re.compile(f"```(json)?(.+)```", re.DOTALL | re.IGNORECASE | re.MULTILINE)
+
 
 def extract_data(response, transaction):
     try:
@@ -219,7 +218,7 @@ def extract_data(response, transaction):
             res = json.loads(match.groups()[1])
 
         log.debug(f"Parsed json {res}")
-            
+
         res = massage_data(res)
 
         validate_response_data(res, transaction)
@@ -230,40 +229,37 @@ def extract_data(response, transaction):
         return None
 
 
-
-confidence_cuttoff = 70
-
-# Make sure we're over the cutoff on half of the attempts
-# total_confidence_cuttoff = confidence_cuttoff * (tries // 2)
+confidence_cuttoff = 95
 
 high_confidence_level = 97
 
 max_attempts = 5
 
+
 def choose_category(datas):
     cat_sums = {}
     for d in datas:
-        cat = d['category']
-        confidence = d['confidenceLevel']
+        cat = d["category"]
+        confidence = d["confidenceLevel"]
         if confidence < confidence_cuttoff:
             continue
 
         if cat in cat_sums:
-            cat_sums[cat]['total'] += confidence
-            cat_sums[cat]['count'] += 1
+            cat_sums[cat]["total"] += confidence
+            cat_sums[cat]["count"] += 1
         else:
             cat_sums[cat] = {
-                'total': confidence,
-                'count': 1,
+                "total": confidence,
+                "count": 1,
             }
 
     if not cat_sums:
         return None
 
-    sums_sorted = sorted(cat_sums.items(), key=lambda x: x[1]['total'], reverse=True)
+    sums_sorted = sorted(cat_sums.items(), key=lambda x: x[1]["total"], reverse=True)
 
     high = sums_sorted[0][1]
-    avg = high['total'] / high['count']
+    avg = high["total"] / high["count"]
 
     if avg < confidence_cuttoff:
         return None
@@ -275,14 +271,18 @@ def get_multiple_tries(prompt, transaction):
 
     datas = []
     for i in range(max_attempts):
-        response: ChatResponse = chat(model=model, messages=[
-            {
-                'role': 'user',
-                'content': prompt,
-            },
-        ], keep_alive='10m')
+        response: ChatResponse = chat(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            keep_alive="10m",
+        )
 
-        response_content = response['message']['content']
+        response_content = response["message"]["content"]
 
         log.debug(response_content)
 
@@ -290,8 +290,8 @@ def get_multiple_tries(prompt, transaction):
         if data:
             datas.append(data)
 
-            if data['confidenceLevel'] >= high_confidence_level:
-                return (i+1, datas)
+            if data["confidenceLevel"] >= high_confidence_level:
+                return (i + 1, datas)
 
     if not datas:
         log.error(f"Failed to get data after {max_attempts} attempts.")
@@ -300,9 +300,11 @@ def get_multiple_tries(prompt, transaction):
 
 
 def generate_categorization_query_prompt(t):
-    return f"Which category was the transaction with the description '{t['Description']}', " + \
-        f" account '{t['Account']}' and institution '{t["Institution"]}' " + \
-        f"categorized as? Say there were no previous categorizations if there were none."
+    return (
+        f"Which category was the transaction with the description '{t['Description']}', "
+        + f" account '{t['Account']}' and institution '{t["Institution"]}' "
+        + f"categorized as? Say there were no previous categorizations if there were none."
+    )
 
 
 client = chromadb.Client()
@@ -312,22 +314,18 @@ collection = client.create_collection(name="example_transactions")
 for i, d in enumerate(get_example_trans_docs()):
     response = ollama.embed(model=embedding_model, input=d)
     embeddings = response["embeddings"]
-    collection.add(
-        ids=[str(i)],
-        embeddings=embeddings,
-        documents=[d]
-    )
+    collection.add(ids=[str(i)], embeddings=embeddings, documents=[d])
 
 
-with open('./out/transactions-out.csv', 'w', newline='', encoding='utf-8') as out_f:
+with open(output_file, "w", newline="", encoding="utf-8") as out_f:
     fields = get_transaction_fields()
     w = csv.DictWriter(out_f, fieldnames=fields)
     w.writeheader()
 
     start = time.time()
-    for t in trans[:200]:
+    for t in trans:
         # Already categorized
-        if t.get('Category'):
+        if t.get("Category"):
             w.writerow(t)
             out_f.flush()
             log.info("Line is already categorized, skipping.")
@@ -340,17 +338,11 @@ with open('./out/transactions-out.csv', 'w', newline='', encoding='utf-8') as ou
 
         log.info(f"Prompt for categorization query: {cat_query_prompt}")
 
-        response = ollama.embed(
-            model=embedding_model,
-            input=cat_query_prompt
-        )
+        response = ollama.embed(model=embedding_model, input=cat_query_prompt)
 
-        results = collection.query(
-            query_embeddings=response["embeddings"],
-            n_results=1
-        )
+        results = collection.query(query_embeddings=response["embeddings"], n_results=1)
 
-        cat_response = results['documents'][0][0]
+        cat_response = results["documents"][0][0]
 
         log.info(f"Categorization query response: {cat_response}")
 
@@ -372,7 +364,7 @@ with open('./out/transactions-out.csv', 'w', newline='', encoding='utf-8') as ou
 
         out_dict = {
             **t,
-            'Category': cat,
+            "Category": cat,
         }
 
         w.writerow(out_dict)
