@@ -6,6 +6,7 @@ import logging
 
 import tiktoken
 
+import ollama
 from ollama import chat
 from ollama import ChatResponse
 
@@ -98,31 +99,35 @@ def get_example_trans():
 
     return examples
 
+def get_example_trans_docs():
+    return [
+        f"Transaction with description '{t['Description']}', Account '{t['Account']}' from institution '{t['Institution']}' " +
+            f"was categorized as '{t['Category']}'"
+        for t in example_trans
+    ]
 
 example_trans = get_example_trans()
 
 
-def build_prompt(t) -> str:
+def build_prompt(t, cat_response) -> str:
     accts_text = "\n".join(
         (f"Account Name: {a["Account"]}, Account Type: {a["Group"]}, Account Class: {a["Class"]}" for a in accts)
     )
     t_text = "\n".join((f"{k}: {v}" for k, v in t.items()))
 
-    example_t_text = '\n'.join((
-        f"Transaction with description '{t['Description']}', Account '{t['Account']}' from institution '{t['Institution']}' " +
-            f"was categorized as '{t['Category']}'"
-        for t in example_trans
-    ))
+    example_t_text = ""
+    if cat_response:
+        example_t_text = f"""Here are some examples of previous categorization(s):
+
+```
+{cat_response}
+```
+"""
 
     c_text = "\n".join(cats)
     
     return f"""Please categorize the following financial transaction.
-
-Here are some examples of previous categorizations:
-
-```
 {example_t_text}
-```
 
 For context, this transaction may be from one of the following accounts:
 
@@ -280,6 +285,28 @@ def get_multiple_tries(prompt, transaction):
     return datas
 
 
+
+def generate_categorization_query_prompt(t):
+    return f"Which category was the transaction with the description '{t['Description']}', " + \
+        f" account '{t['Account']}' and institution 'f{t["Institution"]}' " + \
+        f"categorized as?"
+
+
+client = chromadb.Client()
+collection = client.create_collection(name="example_transactions")
+
+# store each document in a vector embedding database
+for i, d in enumerate(get_example_trans_docs()):
+    response = ollama.embed(model=embedding_model, input=d)
+    embeddings = response["embeddings"]
+    collection.add(
+        ids=[str(i)],
+        embeddings=embeddings,
+        documents=[d]
+    )
+
+
+
 with open('./out/transactions-out.csv', 'w', newline='', encoding='utf-8') as out_f:
     fields = get_transaction_fields()
     w = csv.DictWriter(out_f, fieldnames=fields)
@@ -296,9 +323,28 @@ with open('./out/transactions-out.csv', 'w', newline='', encoding='utf-8') as ou
 
         log.info("Categorizing line")
 
-        prompt = build_prompt(t)
+        # generate an embedding for the input and retrieve the most relevant doc
+        cat_query_prompt = generate_categorization_query_prompt(t)
 
-        # log.info(f"The prompt: {prompt}")
+        log.info(f"Prompt for categorization query: {cat_query_prompt}")
+
+        response = ollama.embed(
+            model=embedding_model,
+            input=cat_query_prompt
+        )
+
+        results = collection.query(
+            query_embeddings=response["embeddings"],
+            n_results=1
+        )
+
+        cat_response = results['documents'][0][0]
+
+        log.info(f"Categorization query response: {cat_response}")
+
+        prompt = build_prompt(t, cat_response)
+
+        log.debug(f"Full prompt: {prompt}")
 
         num_tokens = num_tokens_from_string(prompt, "o200k_base")
 
