@@ -114,8 +114,9 @@ def build_prompt(t, cat_response) -> str:
     example_t_text = ""
     if cat_response:
         example_t_text = f"""
-Here are some examples of previous categorization(s), you should prefer
-these previous categorizations over inferring them from the transaction's fields:
+Here is a possibly related previous categorization, if this categorization matches the
+transaction that is provided, you should prefer this previous categorization over 
+inferring them from the transaction's fields:
 
 ```
 {cat_response}
@@ -245,23 +246,19 @@ def choose_category(datas):
             continue
 
         if cat in cat_sums:
-            cat_sums[cat]["total"] += confidence
-            cat_sums[cat]["count"] += 1
+            cat_sums[cat] = max(confidence, cat_sums[cat])
         else:
-            cat_sums[cat] = {
-                "total": confidence,
-                "count": 1,
-            }
+            cat_sums[cat] = confidence
 
     if not cat_sums:
         return None
 
-    sums_sorted = sorted(cat_sums.items(), key=lambda x: x[1]["total"], reverse=True)
+    sums_sorted = sorted(cat_sums.items(), key=lambda x: x[1], reverse=True)
 
-    high = sums_sorted[0][1]
-    avg = high["total"] / high["count"]
+    max_confidence = sums_sorted[0][1]
 
-    if avg < confidence_cuttoff:
+    if max_confidence < confidence_cuttoff:
+        log.info(f"Skipping {datas[0]["transactionId"]} because it had confidence below cuttoff of: {max_confidence}")
         return None
 
     return sums_sorted[0][0]
