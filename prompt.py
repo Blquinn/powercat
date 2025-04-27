@@ -224,6 +224,10 @@ def get_multiple_tries(tx: Transaction) -> Optional[Categorization]:
     return max_cat
 
 
+start_embedding = time.time()
+
+log.info(f"Begin indexing previous transactions")
+
 embeddings = OllamaEmbeddings(model=embedding_model, keep_alive=10 * 60)
 
 vector_store = InMemoryVectorStore(embeddings)
@@ -240,6 +244,8 @@ example_tx_docs = [
 docs = vector_store.add_documents(
     documents=example_tx_docs,
 )
+
+log.info(f"Completed indexing transactions in {round(time.time() - start_embedding, 2)}s")
 
 
 def retrieve_previous_txs(state: State):
@@ -341,7 +347,7 @@ with open(output_file, "w", newline="", encoding="utf-8") as out_f:
     w.writeheader()
 
     start = time.time()
-    for tx in all_transactions:
+    for tx in all_transactions[:100]:
         # Already categorized
         if tx["category"].strip():
             w.writerow(transaction_to_row(tx))
@@ -349,14 +355,16 @@ with open(output_file, "w", newline="", encoding="utf-8") as out_f:
             log.info("Line is already categorized, skipping.")
             continue
 
+        line_start = time.time()
         log.info("Categorizing line")
 
         cat = get_multiple_tries(tx)
         category = tx["category"]
 
         if cat:
+            line_end = time.time()
             log.info(
-                f"Categorized {tx["description"]} -- {cat.category}, {cat.confidence_level} -- {cat.explanation}"
+                f"Categorized ({round(line_end-line_start, 3)} s) {tx["description"]} -- {cat.category}, {cat.confidence_level} -- {cat.explanation}"
             )
             category = cat.category
         else:
