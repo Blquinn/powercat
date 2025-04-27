@@ -399,7 +399,7 @@ log.info(
 
 start = time.time()
 processed = 0
-for tx_cells in transactions[:10]:
+for tx_cells in transactions:
 
     tx: Transaction = extract_cell_dict(tx_cells)
     if tx["Category"]:
