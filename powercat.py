@@ -284,8 +284,6 @@ def get_multiple_tries(tx: Transaction) -> Optional[Categorization]:
 
 
 def retrieve_previous_txs(state: State):
-    # TODO I don't think embedding models are capable of returning nothing
-    # They always provide some context
     prev_tx_tmpl = ChatPromptTemplate.from_template(
         """Which category was the transaction with the description '{description}',
 account '{account}', and institution '{institution}' categorized as?
@@ -418,8 +416,6 @@ for tx_cells in transactions:
         log.info(
             f"Categorized ({round(line_end-line_start, 3)} s) {tx["Description"]} -- {cat.category}, {cat.confidence_level} -- {cat.explanation}"
         )
-        # category = cat.category
-        # TODO Update the cell
         cat_cell = tx_cells["Category"]
         cat_cell.value = cat.category
         cat_cell.fill = PatternFill(
