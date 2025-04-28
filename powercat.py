@@ -401,7 +401,7 @@ for tx_cells in transactions:
 
     tx: Transaction = extract_cell_dict(tx_cells)
     if tx["Category"]:
-        log.info("Line is already categorized, skipping.")
+        log.debug("Line is already categorized, skipping.")
         continue
 
     line_start = time.time()
