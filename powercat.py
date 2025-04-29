@@ -3,9 +3,9 @@ import sys
 import logging
 import time
 import argparse
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, TypedDict
-from datetime import datetime
 
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
@@ -21,6 +21,9 @@ from openpyxl import load_workbook
 from openpyxl.cell import Cell
 from openpyxl.styles import PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
+
+from autocat import AutoCat
+from consts import Account, Transaction, transaction_cols
 
 
 logging.basicConfig(level=logging.INFO)
@@ -125,7 +128,7 @@ categories_sheet = workbook["Categories"]
 transactions_sheet = workbook["Transactions"]
 
 account_cols = ["Account", "Class Override", "Group"]
-accounts = [
+accounts: List[Account] = [
     extract_cell_dict(d) for d in extract_worksheet_vals(accounts_sheet, account_cols)
 ]
 
@@ -134,65 +137,28 @@ categories = [
     extract_cell_dict(d)
     for d in extract_worksheet_vals(categories_sheet, category_cols)
 ]
-cats = [d["Category"] for d in categories]
+cats: List[str] = [d["Category"] for d in categories]
 
-transaction_cols = [
-    "Date",
-    "Description",
-    "Category",
-    "Amount",
-    "Account",
-    "Account #",
-    "Institution",
-    "Month",
-    "Week",
-    "Transaction ID",
-    "Account ID",
-    "Check Number",
-    "Full Description",
-    "Date Added",
-]
+
 transactions = list(extract_worksheet_vals(transactions_sheet, transaction_cols))
-transaction_data = [
+transaction_data: List[Transaction] = [
     extract_cell_dict(t)
     for t in extract_worksheet_vals(transactions_sheet, transaction_cols)
 ]
 
+autocat: Optional[AutoCat] = None
+
+if "AutoCat" in workbook.sheetnames:
+    autocat = AutoCat(workbook["AutoCat"])
+
 ####################################
 # Done loading
 
-Transaction = TypedDict(
-    "Transaction",
-    {
-        "Date": datetime,
-        "Description": str,
-        "Category": str,
-        "Amount": str,
-        "Account": str,
-        "Account #": str,
-        "Institution": str,
-        "Month": datetime,
-        "Week": datetime,
-        "Transaction ID": str,
-        "Account ID": str,
-        "Check Number": int,
-        "Full Description": str,
-        "Date Added": datetime,
-    },
-)
-
-Account = TypedDict(
-    "Account",
-    {
-        "Account": str,
-        "Account Number": str,
-        "Class Override": str,
-        "Group": str,
-    },
-)
-
 
 class Categorization(BaseModel):
+    """
+    Categorization is the model that is returned from the llm "function call".
+    """
     transaction_id: str = Field(
         description="The transaction id from the supplied transaction"
     )
@@ -216,6 +182,7 @@ class Categorization(BaseModel):
 
 
 class State(TypedDict):
+    """State is the langchain operation graph state"""
     transaction: Transaction
     previous_transactions: List[Document]
     categorization: Categorization
@@ -250,7 +217,7 @@ def format_transaction(t: Transaction) -> str:
     return "\n".join((format_transaction_value(k, v) for k, v in t.items() if k and v))
 
 
-def get_multiple_tries(tx: Transaction) -> Optional[Categorization]:
+def invoke_llm_with_retries(tx: Transaction) -> Optional[Categorization]:
     max_cat: Categorization = None
     for i in range(max_attempts):
         try:
@@ -404,11 +371,25 @@ for tx_cells in transactions:
         log.debug("Line is already categorized, skipping.")
         continue
 
+    cat_cell = tx_cells["Category"]
+
+    if autocat:
+        autocat_cat = autocat.try_categorize(tx)
+        if autocat_cat:
+            log.info(
+                f"AutoCat categorized {tx["Description"]} -- {autocat_cat}"
+            )
+            cat_cell.value = autocat_cat
+            cat_cell.fill = PatternFill(
+                start_color="4AC8FF", end_color="4AC8FF", fill_type="solid"
+            )
+            continue
+
     line_start = time.time()
 
     log.info("Categorizing line")
 
-    cat = get_multiple_tries(tx)
+    cat = invoke_llm_with_retries(tx)
     category = tx["Category"]
 
     if cat:
@@ -416,7 +397,6 @@ for tx_cells in transactions:
         log.info(
             f"Categorized ({round(line_end-line_start, 3)} s) {tx["Description"]} -- {cat.category}, {cat.confidence_level} -- {cat.explanation}"
         )
-        cat_cell = tx_cells["Category"]
         cat_cell.value = cat.category
         cat_cell.fill = PatternFill(
             start_color="FFF66C", end_color="FFF66C", fill_type="solid"
