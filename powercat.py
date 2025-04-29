@@ -3,7 +3,6 @@ import sys
 import logging
 import time
 import argparse
-import re
 from pathlib import Path
 from typing import Dict, List, Optional, TypedDict
 
@@ -21,6 +20,7 @@ from openpyxl import load_workbook
 from openpyxl.cell import Cell
 from openpyxl.styles import PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
+from slugify import slugify
 
 from autocat import AutoCat
 from consts import Account, Transaction, transaction_cols
@@ -31,6 +31,9 @@ logging.getLogger("httpcore").setLevel(logging.WARN)
 logging.getLogger("httpx").setLevel(logging.WARN)
 log = logging.getLogger(__name__)
 
+
+####################################
+# CLI
 
 class Args:
     file_path: str
@@ -53,6 +56,9 @@ parser.add_argument(
 )
 args: Args = parser.parse_args()
 
+
+####################################
+# Const
 
 embedding_model = args.embedding_model
 model = args.model
@@ -151,9 +157,9 @@ autocat: Optional[AutoCat] = None
 if "AutoCat" in workbook.sheetnames:
     autocat = AutoCat(workbook["AutoCat"])
 
-####################################
-# Done loading
 
+####################################
+# LLM Crap
 
 class Categorization(BaseModel):
     """
@@ -188,16 +194,26 @@ class State(TypedDict):
     categorization: Categorization
 
 
-def get_example_transactions(all_transactions: List[Transaction]) -> List[Transaction]:
-    categorized = [t for t in all_transactions if t.get("Category")]
+def transaction_identity(t: Transaction):
+    description_slug = slugify(t["Description"])
+    return (t["Account"], description_slug)
+
+
+def get_categorized_transactions(all_transactions: List[Transaction]) -> List[Transaction]:
 
     examples = []
-    seen_descriptions = set()
-    for t in categorized:
-        if t["Description"] in seen_descriptions:
+    seen = set()
+
+    for t in all_transactions:
+        if not t.get("Category"):
             continue
 
-        seen_descriptions.add(t["Description"])
+        ident = transaction_identity(t)
+
+        if ident in seen:
+            continue
+
+        seen.add(ident)
 
         examples.append(t)
 
@@ -345,18 +361,26 @@ start_embedding = time.time()
 
 log.info(f"Begin indexing previous transactions")
 
+categorized_txs = get_categorized_transactions(transaction_data)
+
 example_tx_docs = [
     Document(
         id=t["Transaction ID"],
         page_content=format_transaction(t),
         metadata={"source": "transaction_file"},
     )
-    for t in get_example_transactions(transaction_data)
+    for t in categorized_txs
 ]
 
 docs = vector_store.add_documents(
     documents=example_tx_docs,
 )
+
+# Maps transactions by their (Account, Description)
+transaction_map = {
+    transaction_identity(t): t["Category"]
+    for t in categorized_txs
+}
 
 log.info(
     f"Completed indexing transactions in {round(time.time() - start_embedding, 2)}s"
@@ -373,13 +397,25 @@ for tx_cells in transactions:
 
     cat_cell = tx_cells["Category"]
 
+    tx_ident = transaction_identity(tx)
+    cat = transaction_map.get(tx_ident)
+    if cat:
+        log.info(
+            f"Categorized based on previous transaction {tx["Description"]} -- {cat}"
+        )
+        cat_cell.value = cat
+        cat_cell.fill = PatternFill(
+            start_color="C24AFF", end_color="C24AFF", fill_type="solid"
+        )
+        continue
+
     if autocat:
-        autocat_cat = autocat.try_categorize(tx)
-        if autocat_cat:
+        cat = autocat.try_categorize(tx)
+        if cat:
             log.info(
-                f"AutoCat categorized {tx["Description"]} -- {autocat_cat}"
+                f"AutoCat categorized {tx["Description"]} -- {cat}"
             )
-            cat_cell.value = autocat_cat
+            cat_cell.value = cat
             cat_cell.fill = PatternFill(
                 start_color="4AC8FF", end_color="4AC8FF", fill_type="solid"
             )
