@@ -397,18 +397,7 @@ for tx_cells in transactions:
 
     cat_cell = tx_cells["Category"]
 
-    tx_ident = transaction_identity(tx)
-    cat = transaction_map.get(tx_ident)
-    if cat:
-        log.info(
-            f"Categorized based on previous transaction {tx["Description"]} -- {cat}"
-        )
-        cat_cell.value = cat
-        cat_cell.fill = PatternFill(
-            start_color="C24AFF", end_color="C24AFF", fill_type="solid"
-        )
-        continue
-
+    # Attempt to categorize with autocat
     if autocat:
         cat = autocat.try_categorize(tx)
         if cat:
@@ -420,6 +409,19 @@ for tx_cells in transactions:
                 start_color="4AC8FF", end_color="4AC8FF", fill_type="solid"
             )
             continue
+
+    # Attempt to categorize based on exact match on prev transactions
+    tx_ident = transaction_identity(tx)
+    cat = transaction_map.get(tx_ident)
+    if cat:
+        log.info(
+            f"Categorized based on previous transaction {tx["Description"]} -- {cat}"
+        )
+        cat_cell.value = cat
+        cat_cell.fill = PatternFill(
+            start_color="C24AFF", end_color="C24AFF", fill_type="solid"
+        )
+        continue
 
     line_start = time.time()
 
